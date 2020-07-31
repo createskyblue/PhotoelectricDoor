@@ -1,22 +1,22 @@
 /*
-Copyright (c) 2020 LHW - createskyblue
-Arduino-Pomodoro is licensed under Mulan PSL v2.
-You can use this software according to the terms and conditions of the Mulan PSL v2.
-You may obtain a copy of Mulan PSL v2 at:
+  Copyright (c) 2020 LHW - createskyblue
+  Arduino-Pomodoro is licensed under Mulan PSL v2.
+  You can use this software according to the terms and conditions of the Mulan PSL v2.
+  You may obtain a copy of Mulan PSL v2 at:
          http://license.coscl.org.cn/MulanPSL2
-THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
-EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
-MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
-See the Mulan PSL v2 for more details.
+  THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
+  EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
+  MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+  See the Mulan PSL v2 for more details.
 
-光电门下位机程序版本:
-V1.1
+  光电门下位机程序版本:
 */
 #include <U8g2lib.h>
 //#include <SPI.h>
 //U8G2_ST7565_JLX12864_F_4W_SW_SPI u8g2(U8G2_R0,19,20,14,22,21);
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* clock=*/ PB6, /* data=*/ PB7, /* reset=*/ U8X8_PIN_NONE);
-int DATA[2][8]; //目标传感器|历史数据
+#define TmpDateMax 64
+int DATA[2][TmpDateMax]; //目标传感器|历史数据
 bool TriggerTimer = false;
 bool State[2] = {1, 1}; //传感器状态
 int grap[2][16]; //图形缓冲区
@@ -25,9 +25,10 @@ int DataDeal[2][2]; //目标传感器|累加&去抖均值
 unsigned long timestamp[2][3]; //目标传感器|电平突变起始&电平突变结束&突变维持时间
 unsigned long deltaT; //A,B传感器从起始到结束的时间差
 unsigned long GrapSampling; //波形捕获时间戳
-#define SysVersion 1.1
-#define MutationThreshold 150
+#define SysVersion 1.2
+#define MutationThreshold 100
 #define SamplingRate 10
+
 byte io[2] = {0, 1};
 byte a = 0;
 int LightIntensity = 0;
@@ -46,7 +47,7 @@ void setup() {
   delay(200);
   u8g2.print("F/W:  ");
   u8g2.print(SysVersion);
-  Serial.println(String("F/W: ")+SysVersion);
+  Serial.println(String("F/W: ") + SysVersion);
   u8g2.setCursor(0, 36);
   u8g2.print("Auto white balance");
   u8g2.setCursor(0, 63);
@@ -63,13 +64,13 @@ void setup() {
 void loop() {
   collect();
   MakeGrap();
-  SerialOutPut();
+ SerialOutPut();
 
 }
 void SerialOutPut() {
-  int CheckCode = 4096 + DataDeal[0][1] + DataDeal[1][1] + LightIntensity + timestamp[0][2] + timestamp[1][2] + deltaT;
+  int CheckCode = 4096 + DataDeal[0][1] + DataDeal[1][1] - LightIntensity + timestamp[0][2] + timestamp[1][2] + deltaT;
 
-  Serial.println((4096 - LightIntensity) + String(",") + (DataDeal[0][1] + LightIntensity) + String(",") + (DataDeal[1][1] + LightIntensity) + String(",") + CheckCode + String(",") + timestamp[0][2] + String(",") + timestamp[1][2] + String(",") + deltaT + String(","));
+  Serial.println((4096 - LightIntensity) + String(",") + DataDeal[0][1]  + String(",") + DataDeal[1][1]  + String(",") + CheckCode + String(",") + timestamp[0][2] + String(",") + timestamp[1][2] + String(",") + deltaT + String(","));
 }
 void collect() {
   int IoALeng = sizeof(io) / sizeof(io[0]);
@@ -77,45 +78,63 @@ void collect() {
   for (byte Iio = 0; Iio < IoALeng; Iio++) {
     //进行数据移位
     DataDeal[Iio][0] = 0; //移位前把历史累加数据清零
-    for (int i = 0; i < 8 - 1; i++) {
+    for (int i = 0; i < TmpDateMax - 1; i++) {
       DATA[Iio][i] = DATA[Iio][i + 1];
       DataDeal[Iio][0] += DATA[Iio][i + 1];
     }
     //写入新的传感器数据
     //DATA[Iio][7] = analogRead(io[Iio]) - LightIntensity;
-    DATA[Iio][7] = analogRead(io[Iio]) - LightIntensity;
-    DataDeal[Iio][0] += DATA[Iio][7];
-    DataDeal[Iio][1] = DataDeal[Iio][0] / 8.0; //计算均值
+    DATA[Iio][TmpDateMax-1] = analogRead(io[Iio]);
+    DataDeal[Iio][0] += DATA[Iio][TmpDateMax-1];
+    DataDeal[Iio][1] = DataDeal[Iio][0] / float(TmpDateMax); //计算均值
     //记录电平突变时间戳
     Trigger = false;
-    //Serial.println(String("当前：") + DATA[Iio][0] + String("大于阈值：") + (DataDeal[Iio][1] + MutationThreshold)+String("小于阈值：") + (DataDeal[Iio][1] - MutationThreshold));
+   // Serial.println(String("当前：") + DATA[Iio][0] + String("大于阈值：") + (DataDeal[Iio][1] + MutationThreshold)+String("小于阈值：") + (DataDeal[Iio][1] - MutationThreshold));
     /*
-       旧版本可以动态调整检测速率，但是动态调整范围比较窄
-
-      if (DATA[Iio][0] > DataDeal[Iio][1] + MutationThreshold) {
+       旧版本可以动态调整检测速率，但是动态调整范围比较窄 v1.0
+    *//*
+    if (DATA[Iio][0] > DataDeal[Iio][1] + MutationThreshold && State[Iio] == 1) {
       timestamp[Iio][0] = millis();
       State[Iio] = 0;
       //Serial.println(Iio + String("-触发电平突变起始 当前：") + DATA[Iio][0] + String("大于阈值：") + (DataDeal[Iio][1] + MutationThreshold));
-      }
-      if (DATA[Iio][0] < DataDeal[Iio][1] - MutationThreshold && millis() > timestamp[Iio][0]) {
+    }
+    if (DATA[Iio][0] < DataDeal[Iio][1] - MutationThreshold && millis() > timestamp[Iio][0] && State[Iio] == 0) {
       timestamp[Iio][1] = millis();
       Trigger = true;
       State[Iio] = 1;
-      }
-    */
-    //这个为固定阈值版本，无法动态调整，但是效率比较高
-    if (DataDeal[Iio][1] > 0.5 * (4096 - LightIntensity) && State[Iio] == 1) {
+    }
+*/
+    //这个为固定阈值版本，无法动态调整，但是效率比较高 v1.1
+    /*
+      if (DataDeal[Iio][1] > 0.6 * (4096 - LightIntensity) && State[Iio] == 1) {
       timestamp[Iio][0] = millis();
       State[Iio] = 0;
       //Serial.println(timestamp[1][0]+String(" , ")+timestamp[1][1]);
       //Serial.println(Iio + String("-触发电平突变起始 当前：") + DATA[Iio][0] + String("大于阈值：") + (DataDeal[Iio][1] + MutationThreshold));
-    }
-    if (DataDeal[Iio][1] < 0.35 * (4096 - LightIntensity) && millis() > timestamp[Iio][0] && State[Iio] == 0) {
+      }
+      if (DataDeal[Iio][1] < 0.4 * (4096 - LightIntensity) && millis() > timestamp[Iio][0] && State[Iio] == 0) {
       timestamp[Iio][1] = millis();
       Trigger = true;
       State[Iio] = 1;
       //Serial.println(timestamp[1][0]+String(" , ")+timestamp[1][1]);
-    }
+      }
+      */
+       //这个为固定阈值版本，限定幅度均值动态调整，但是效率比较高 v1.2
+     // Serial.println(Iio+String("->目前：") + DATA[Iio][TmpDateMax-1] + String("大于阈值：") + (1.2 * DataDeal[Iio][1])+String("小于阈值：") + (0.8 * DataDeal[Iio][1]));
+      if (DATA[Iio][TmpDateMax-1] > (1.05 * DataDeal[Iio][1]) && State[Iio] == 1) {
+       // Serial.println(Iio+String("->####"));
+      timestamp[Iio][0] = millis();
+      State[Iio] = 0;
+      //Serial.println(timestamp[1][0]+String(" , ")+timestamp[1][1]);
+      //Serial.println(Iio + String("-触发电平突变起始 当前：") + DATA[Iio][0] + String("大于阈值：") + (DataDeal[Iio][1] + MutationThreshold));
+      }
+      if (DATA[Iio][TmpDateMax-1] < (0.95 * DataDeal[Iio][1]) && millis() > timestamp[Iio][0] && State[Iio] == 0) {
+       // Serial.println(Iio+String("->#############"));
+      timestamp[Iio][1] = millis();
+      Trigger = true;
+      State[Iio] = 1;
+      //Serial.println(timestamp[1][0]+String(" , ")+timestamp[1][1]);
+      }
     if (Trigger) {
       timestamp[Iio][2] = timestamp[Iio][1] - timestamp[Iio][0];
       if (TriggerTimer) {
@@ -139,8 +158,8 @@ void MakeGrap() {
     }
   }
   if (GrapX < 16 && GrapSampling + SamplingRate < millis()) {
-    grap[0][GrapX] = map(DataDeal[0][1], 0, 4095 - LightIntensity, 0, 31);
-    grap[1][GrapX] = map(DataDeal[1][1], 0, 4095 - LightIntensity, 0, 31);
+    grap[0][GrapX] = map(DataDeal[0][1], 0, 4095, 0, 31);
+    grap[1][GrapX] = map(DataDeal[1][1], 0, 4095 , 0, 31);
     GrapX++;
     GrapSampling = millis();
   }
